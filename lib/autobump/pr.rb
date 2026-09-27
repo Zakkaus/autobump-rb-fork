@@ -2,15 +2,17 @@
 require 'shellwords'
 module Autobump
   # Stage 8: PR. Push the branch (bail if a review PR is already open on it), open a
-  # PR that cc's the package maintainers (parsed from metadata.xml), marks multi-arch
+  # PR that cc's the package's github_account from overlay.toml, marks multi-arch
   # bumps draft, and notes GUI uncertainty.
   class PR
-    MDMETA_AWK = <<~'AWK'
-      /<maintainer/{e="";n=""}
-      /<email>/{t=$0; gsub(/.*<email>[[:space:]]*|[[:space:]]*<\/email>.*/,"",t); e=t}
-      /<name>/ {t=$0; gsub(/.*<name>[[:space:]]*|[[:space:]]*<\/name>.*/,"",t);  n=t}
-      /<\/maintainer>/{print e "\t" n}
-    AWK
+    OVERLAY_TOML = '.github/workflows/overlay.toml'
+    # github_account is a login or a list of logins; Ruby has no TOML parser, python3 does.
+    ACCOUNTS_PY = <<~'PY'
+      import sys, tomllib
+      with open(sys.argv[1], 'rb') as f:
+          acct = tomllib.load(f).get(sys.argv[2], {}).get('github_account', [])
+      print(' '.join('@' + a for a in ([acct] if isinstance(acct, str) else acct)))
+    PY
 
     QUERY_TRIES = 3
 
@@ -161,24 +163,13 @@ module Autobump
       File.exist?(p) ? File.readlines(p).map(&:chomp).reject(&:empty?) : []
     end
 
-    # metadata.xml maintainers -> GitHub @handles so the owners are cc'd. Best-effort.
-    def maintainer_ccs
-      c = @c; mx = "#{c.pkgdir}/metadata.xml"
-      return '' unless File.exist?(mx)
-      out = []
-      up = c.cfg.upstream_repo.shellescape
-      `awk '#{MDMETA_AWK}' #{mx.shellescape}`.each_line do |ln|
-        em, nm = ln.chomp.split("\t", 2)
-        em ||= ''; nm ||= ''
-        next if (em + nm).empty?
-        login = ''
-        login = `gh api -X GET repos/#{up}/commits -f author=#{em.shellescape} -f per_page=1 --jq '.[0].author.login // empty' 2>/dev/null`.strip unless em.empty?
-        if login.empty? && !nm.empty?
-          login = `gh api -X GET repos/#{up}/commits -f path=#{c.pkg.shellescape} -f per_page=50 2>/dev/null | jq -r --arg n #{Shellwords.escape(nm)} 'map(select(.commit.author.name==$n).author.login)|map(select(.!=null))|first // empty' 2>/dev/null`.strip
-        end
-        out << (!login.empty? ? "@#{login}" : (!em.empty? ? em : nm))
-      end
-      out.join(' ')
+    # The same people nvchecker's issue mentions: github_account in overlay.toml.
+    def self.github_accounts(toml, pkg)
+      return '' unless File.exist?(toml)
+      out = IO.popen(['python3', '-c', ACCOUNTS_PY, toml, pkg], err: File::NULL, &:read)
+      $?&.success? ? out.strip : ''
     end
+
+    def maintainer_ccs = PR.github_accounts(File.join(@c.cfg.repo, OVERLAY_TOML), @c.pkg)
   end
 end
