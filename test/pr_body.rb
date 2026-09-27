@@ -178,6 +178,27 @@ check_eq 'a workflows-permission refusal is recognised', Autobump::PR.workflow_p
 check_eq 'an ordinary push failure is not',
          Autobump::PR.workflow_push_refused?('error: failed to push some refs to ...'), false
 
+# J. cc comes from overlay.toml's github_account, the same logins nvchecker's issue mentions
+Dir.mktmpdir do |d|
+  toml = File.join(d, 'overlay.toml')
+  File.write(toml, <<~TOML)
+    ["dev-foo/one"]
+    source = "github"
+    github_account = "alice"
+
+    ["dev-foo/two"]
+    github_account = ["alice", "bob"]
+
+    ["dev-foo/none"]
+    source = "github"
+  TOML
+  check_eq 'one github_account', Autobump::PR.github_accounts(toml, 'dev-foo/one'), '@alice'
+  check_eq 'a list of github_account', Autobump::PR.github_accounts(toml, 'dev-foo/two'), '@alice @bob'
+  check_eq 'no github_account -> no cc', Autobump::PR.github_accounts(toml, 'dev-foo/none'), ''
+  check_eq 'package not tracked -> no cc', Autobump::PR.github_accounts(toml, 'dev-foo/absent'), ''
+  check_eq 'no overlay.toml -> no cc', Autobump::PR.github_accounts(File.join(d, 'missing.toml'), 'dev-foo/one'), ''
+end
+
 puts '----'
 puts "pr_body: #{$fail.zero? ? 'all passed' : "#{$fail} failed"}"
 exit($fail.zero? ? 0 : 1)
