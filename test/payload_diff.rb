@@ -277,6 +277,42 @@ left_rm, = F.call(%w[app/images/clawd-magnifier.gif], %w[app/images/clawd-lens.g
                   new_tree: named + %w[app/images/clawd-lens.gif])
 check 'an ordinary directory is not a bundle', left_rm, %w[app/images/clawd-magnifier.gif]
 
+# --- rule 6: application assets -----------------------------------------------------------
+# cursor 3.22.12 -> 3.23.12: extension bundles moved and node_modules re-hoisted, nothing else
+app = 'usr/share/cursor/resources/app'
+left_rm, left_ad, ch = F.call(
+  %W[#{app}/extensions/git/dist/main.js #{app}/extensions/git/dist/askpass.d.ts
+     #{app}/node_modules/@vscode/ripgrep/package.json #{app}/node_modules/@vscode/ripgrep/LICENSE],
+  %W[#{app}/extensions/git-base/dist/extension.js #{app}/extensions/git-base/dist/api.d.ts
+     #{app}/extensions/git-base/package.json #{app}/extensions/git-base/LICENSE.txt
+     #{app}/node_modules/ripgrep/package.json #{app}/node_modules/ripgrep/lib/index.js.map],
+  '3.22.12', '3.23.12'
+)
+check 'moved app assets are not structural', [left_rm, left_ad], [[], []]
+check 'moved app assets count as churn', ch, 10
+
+# kiro 1.1.70 -> 1.2.4 dropped its bundled ANGLE libraries
+left_rm, = F.call(%w[usr/share/kiro/Kiro/libEGL.so usr/share/kiro/Kiro/libGLESv2.so
+                     usr/share/kiro/resources/app/out/main.js],
+                  %w[usr/share/kiro/resources/app/out/main2.js], '1.1.70', '1.2.4')
+check 'a dropped shared object still escalates', left_rm,
+      %w[usr/share/kiro/Kiro/libEGL.so usr/share/kiro/Kiro/libGLESv2.so]
+
+left_rm, = F.call(%W[#{app}/node_modules/native/build/Release/keytar.node], [], '1', '2')
+check 'a native module in node_modules stays structural', left_rm,
+      %W[#{app}/node_modules/native/build/Release/keytar.node]
+
+left_rm, left_ad, = F.call(%w[usr/share/applications/cursor.desktop],
+                           %w[usr/share/applications/cursor-url-handler.desktop
+                              usr/share/cursor/bin/cursor-tunnel], '1', '2')
+check 'a renamed .desktop and a new launcher stay structural', [left_rm, left_ad],
+      [%w[usr/share/applications/cursor.desktop],
+       %w[usr/share/applications/cursor-url-handler.desktop usr/share/cursor/bin/cursor-tunnel]]
+
+left_rm, = F.call(%w[opt/app/extensions/git/dist/main.js], [], '1', '2')
+check 'a script outside an app resources tree stays structural', left_rm,
+      %w[opt/app/extensions/git/dist/main.js]
+
 puts '----'
 if $fail.zero?
   puts 'payload_diff: all passed'
