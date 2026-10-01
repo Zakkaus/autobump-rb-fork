@@ -97,6 +97,26 @@ check 'a finding on a field the bump changed is kept',
       Autobump::Finalize.records_this_bump_touched([['https://x/a.deb', 'SRC_URI']], %w[SRC_URI]),
       [['https://x/a.deb', 'SRC_URI']]
 
+# anytype-bin 0.57.3: Cloudflare answers the runner with 403 on the metadata.xml URLs
+metadata_scan = <<~OUT
+  app-office/anytype-bin
+    DeadUrl: version 0.57.3: metadata.xml: changelog: 403 Client Error: Forbidden for url: https://community.anytype.io/c/news/
+    DeadUrl: version 0.57.3: metadata.xml: bugs-to: 403 Client Error: Forbidden for url: https://community.anytype.io/c/bugs/
+OUT
+metadata_records = Autobump::Finalize.flagged_url_records(metadata_scan, 'app-office/anytype-bin')
+check 'a metadata.xml finding is attributed to metadata.xml', metadata_records.map(&:last).uniq, %w[metadata.xml]
+check 'a metadata.xml finding is dropped when the bump left metadata.xml alone',
+      Autobump::Finalize.records_this_bump_touched(metadata_records, []), []
+check 'a metadata.xml finding is kept when the bump changed metadata.xml',
+      Autobump::Finalize.records_this_bump_touched(metadata_records, %w[metadata.xml]), metadata_records
+
+unparsed = Autobump::Finalize.flagged_url_records(
+  "dev-util/x\n  DeadUrl: version 1.0: 404 for url: https://x.example/gone\n", 'dev-util/x'
+)
+check 'a finding whose field cannot be read has none', unparsed, [['https://x.example/gone', nil]]
+check 'a finding whose field cannot be read counts as touched',
+      Autobump::Finalize.records_this_bump_touched(unparsed, []), unparsed
+
 puts '----'
 puts $fail.zero? ? 'url_recheck: all passed' : "url_recheck: #{$fail} failed"
 exit($fail.zero? ? 0 : 1)
