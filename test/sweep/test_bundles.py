@@ -2,7 +2,7 @@
 """The overlay's use of bin/bundles.py: the sweep's plan and collect, and the trial's bundle step.
 
 The scripted GitHub API and the synthetic overlay come from test/bundle_controller.py; the
-sweep, its helpers and autobump-trial.yml come from the overlay checkout AUTOBUMP_OVERLAY names.
+sweep, its helpers and scripts/autobump-trial.sh come from the overlay checkout AUTOBUMP_OVERLAY names.
 """
 
 import importlib.util
@@ -288,10 +288,10 @@ class SweepTest(Harness):
 
 
 class TrialTest(Harness):
-    """The trial's bundle step, cut from autobump-trial.yml and run as the job runs it."""
+    """The trial's bundle step, cut from scripts/autobump-trial.sh and run as the job runs it."""
 
     def trial(self, package, version):
-        text = (ROOT / ".github" / "workflows" / "autobump-trial.yml").read_text()
+        text = (ROOT / "scripts" / "autobump-trial.sh").read_text()
         start = text.index("bundle=''")
         block = text[start:text.rindex("\n", 0, text.index("ruby autobump-rb/bin/autobump"))]
         block = block.replace("/tmp/autobump-bundles", str(self.tmp / "snapshots"))

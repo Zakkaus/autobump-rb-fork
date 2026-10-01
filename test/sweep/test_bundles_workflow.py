@@ -193,7 +193,9 @@ class BundlesWorkflowTest(unittest.TestCase):
 class TrialAndCutOverTest(unittest.TestCase):
     def test_the_trial_passes_a_read_only_snapshot(self):
         job = workflow("autobump-trial.yml")["jobs"]["trial"]
-        run = next(s["run"] for s in steps(job) if "autobump-rb/bin/autobump" in (s.get("run") or ""))
+        self.assertTrue(any((s.get("run") or "").strip() == "scripts/autobump-trial.sh" for s in steps(job)))
+        run = (ROOT / "scripts" / "autobump-trial.sh").read_text()
+        self.assertIn("ruby autobump-rb/bin/autobump", run)
         self.assertIn(f"{CONTROLLER} status", run)
         self.assertTrue(fetches_autobump_rb(job))
         self.assertNotIn("bundles.py prepare", run)
