@@ -90,6 +90,8 @@ module Autobump
     # the URL findings alone: a MissingRemoteId line quotes a URI in parentheses, and rechecking
     # `https://github.com/Acme/etcd')` escalates a bump whose URLs are all fine.
     URL_IN_TEXT = %r{https?://[^\s'"<>]+}
+    # `metadata.xml: changelog: 403 ...`: a remote-id or upstream URL, not an ebuild variable
+    METADATA_FINDING = /(?:\A|[[:space:]])metadata\.xml:[[:space:]]/
     HOMEPAGE_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' \
                           '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
 
@@ -107,7 +109,7 @@ module Autobump
         mine = current == pkg || line.start_with?("#{pkg}-")
         next unless mine && line =~ /DeadUrl|RedirectedUrl/
 
-        field = line[/\b([A-Z_]+):[[:space:]]/, 1]
+        field = line.match?(METADATA_FINDING) ? 'metadata.xml' : line[/\b([A-Z_]+):[[:space:]]/, 1]
         records.concat(line.scan(URL_IN_TEXT).map do |u|
           [u.sub(/[)\],.;:'"]+\z/, ''), field]
         end)
@@ -116,7 +118,8 @@ module Autobump
 
     # pkgcheck reports the package's URLs, not the bump's. A finding on a field this commit did
     # not touch is pre-existing - the same scan reports it for the version already in the tree -
-    # and blocking the bump on it asks the wrong person at the wrong time.
+    # and blocking the bump on it asks the wrong person at the wrong time. A metadata.xml finding
+    # counts only when the commit changed metadata.xml; one whose field cannot be read is kept.
     def self.records_this_bump_touched(records, touched)
       records.select { |_url, field| field.nil? || touched.include?(field) }
     end
@@ -175,6 +178,9 @@ module Autobump
       old_path = "#{c.pkg}/#{File.basename(c.old_ebuild)}"
       old_text = `git -C #{repo.shellescape} show HEAD~1:#{old_path.shellescape} 2>/dev/null`
       changed = Finalize.fields_changed(old_text, File.read(c.new_ebuild), c.old_pv, c.newver)
+      metadata = "#{c.pkg}/metadata.xml"
+      metadata_same = system('git', '-C', repo, 'diff', '--quiet', 'HEAD~1', 'HEAD', '--', metadata)
+      changed << 'metadata.xml' unless metadata_same
       records = Finalize.records_this_bump_touched(records, changed)
       urls = records.map(&:first).uniq
       return Log.log('pkgcheck URL findings are on fields this bump did not touch') if urls.empty?
