@@ -37,12 +37,22 @@ module Autobump
     end
 
     # A multi-arch bump is opened as a draft: only amd64 was built here, so the other
-    # keywords are untested until a human says otherwise.
-    def self.create_args(repo:, head:, title:, body_file:, multiarch:)
+    # keywords are untested until a human says otherwise. So is one whose GUI launch probe
+    # failed: reasonix-desktop merged five bumps that installed no Electron shell.
+    def self.create_args(repo:, head:, title:, body_file:, multiarch:, gui_failed: false)
       args = ['gh', 'pr', 'create', '--repo', repo, '--base', 'master',
               '--head', head, '--title', title, '--body-file', body_file]
-      args << '--draft' if multiarch
+      args << '--draft' if multiarch || gui_failed
       args
+    end
+
+    PUSH_BACKOFF = [5, 15].freeze
+
+    # GitHub failing on its side (a 5xx, a ref update that failed server-side), which the next
+    # attempt can land
+    def self.push_transient?(output)
+      output.match?(Regexp.union(/Internal Server Error/, /fatal error in commit_refs/, /HTTP 5\d\d/,
+                                 /returned error: 5\d\d/, /remote rejected[^\n]*\(failure\)/))
     end
 
     def initialize(ctx) = (@c = ctx)
@@ -75,9 +85,8 @@ module Autobump
       # path (GitHub's workflow-scope guard does exactly that), and the evidence dir is gone
       # with the CI container, so this is the only record of what the commit actually carried.
       puts `git -C #{cfg.repo.shellescape} show --oneline --stat HEAD`
-      pushed = IO.popen(['git', '-C', cfg.repo, 'push', '-u', '--force', cfg.push_remote, c.branch],
-                        err: %i[child out], &:read)
-      unless $?&.success?
+      pushed, ok = push
+      unless ok
         puts pushed
         # the App token cannot touch .github/workflows/**; no number of retries changes that
         raise Escalate.new('the bot cannot push this branch: it needs the App\'s workflows permission',
@@ -89,12 +98,30 @@ module Autobump
       File.write(body, pr_body)
       subj = `git -C #{cfg.repo.shellescape} log -1 --format=%s`.strip
       args = PR.create_args(repo: cfg.upstream_repo, head: head, title: subj, body_file: body,
-                            multiarch: c.multiarch)
+                            multiarch: c.multiarch, gui_failed: !c.gui_failures.to_a.empty?)
       raise Abort, 'gh pr create failed' unless system(*args)
       Log.ok 'PR opened'
     end
 
     private
+
+    # a finished build is not thrown away for GitHub's hiccup; anything else (auth,
+    # non-fast-forward, the workflows refusal) fails the same way on every attempt
+    def push
+      cfg = @c.cfg
+      (0..PUSH_BACKOFF.size).each do |attempt|
+        out = IO.popen(['git', '-C', cfg.repo, 'push', '-u', '--force', cfg.push_remote, @c.branch],
+                       err: %i[child out], &:read)
+        ok = $?&.success?
+        return [out, ok] if ok || attempt == PUSH_BACKOFF.size || !PR.push_transient?(out)
+
+        puts out
+        Log.log "push failed on GitHub's side; retrying in #{PUSH_BACKOFF[attempt]}s"
+        pause(PUSH_BACKOFF[attempt])
+      end
+    end
+
+    def pause(seconds) = sleep(seconds)
 
     # PR body: terse checklist, English so every contributor can read it. Only the gates
     # that actually passed get a tick and only real caveats get a warning line -- no "nothing
@@ -107,12 +134,21 @@ module Autobump
                "- smoke: #{c.smoke}"]
       lines << rewrite_line if rewrite_line
       lines += diff_lines
+      lines += gui_failure_lines
       meta = []
       meta << "Closes ##{c.issue}" if c.issue
       ccs = maintainer_ccs
       meta << "cc #{ccs}" unless ccs.empty?
       lines += ['', meta.join(' · ')] unless meta.empty?
       lines.join("\n") + "\n"
+    end
+
+    def gui_failure_lines
+      failures = @c.gui_failures.to_a
+      return [] if failures.empty?
+
+      ['', 'Warning: the GUI launch probe failed, so this PR is a draft — launch the app before merging',
+       *failures.map { |bin, outcome| "- `#{bin}`: #{outcome}" }]
     end
 
     # A rewritten variable is an opaque token a reviewer cannot check by eye, so the PR
