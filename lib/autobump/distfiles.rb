@@ -7,7 +7,8 @@ require 'open-uri'
 module Autobump
   # Stage 4: fetch old artifacts, create the new ebuild, fetch + manifest.
   # An unreachable/slow mirror is transient -> Abort (exit 2) so the sweep retries.
-  # A file upstream does not have (404/403) is permanent -> Escalate (exit 3).
+  # A file upstream does not have (404/403) is permanent -> Escalate (exit 3), except a 404
+  # on a version still within UNPUBLISHED_GRACE, which defers while its assets upload.
   class Distfiles
     # Local, permanent reasons `ebuild manifest` can fail, as portage words them. Kept narrow:
     # anything not listed here stays a transient defer, because a wrong guess here turns a slow
@@ -23,6 +24,10 @@ module Autobump
     def self.local_failure(out)
       out.lines.map(&:chomp).reverse.find { |l| LOCAL_FAILURES.any? { |re| l =~ re } }&.strip
     end
+
+    # Long enough for the same-day runs after nvchecker (chained, then the delayed schedule),
+    # short of the next day's, so a tag that never gets its assets still escalates then.
+    UNPUBLISHED_GRACE = 6 * 3600
 
     REWRITE_FETCH_TIMEOUT = 120
     REWRITE_MAX_BYTES = 8 * 1024 * 1024
@@ -101,14 +106,16 @@ module Autobump
           raise Abort, "fetch/manifest timed out (>#{cfg.op_timeout}s); deferring" if code == 124
           # portage says "Couldn't download" for both a 404 and an unreachable mirror, so split on
           # what the fetcher reported per URI: 404/403 means the file is not there, which no number
-          # of retries fixes -- deferring it just files "will retry automatically" every day and
-          # hides the real defect (wrong SRC_URI path, stale pin, artifact never published).
+          # of retries fixes once the release has had time to upload its assets -- deferring it
+          # just files "will retry automatically" every day and hides the real defect (wrong
+          # SRC_URI path, stale pin, artifact never published).
           # Anything else (timeout, connection reset, 5xx) is worth another sweep.
           # Match wget's own line ("ERROR 404: Not Found." / "ERROR 404: File not found.") as well
           # as a bare status line, because the reason text differs per server.
           mirrors = `portageq envvar GENTOO_MIRRORS 2>/dev/null`
           bundle_outcome(out, mirrors) if c.bundles
           if Distfiles.upstream_missing?(out, mirrors)
+            unpublished_outcome(out, mirrors)
             raise Escalate.new("upstream distfile for #{c.newver} is missing (404/403), not a slow mirror",
                                c.evidence.dir)
           end
@@ -144,6 +151,23 @@ module Autobump
       puts "result: #{JSON.generate(d.result)}"
       raise Escalate.new(d.reason, c.evidence.dir) if d.exit_code == 3
       raise Abort, d.reason
+    end
+
+    # A release is often tagged before its assets finish uploading: biliup-bin 1.2.6 and 1.2.11
+    # answered 404 and were bumped by hand within the hour. While the issue has named this
+    # version for less than UNPUBLISHED_GRACE a 404 defers; a 403 is a refusal, not an upload
+    # in progress, and without an issue there is no age to judge, so both keep escalating.
+    def unpublished_outcome(out, mirrors)
+      c = @c
+      return unless c.issue
+      return unless Distfiles.missing_statuses(out, mirrors).values.all?(404)
+      return if Distfiles.local_failure(out)
+      seen = Issue.version_seen_at(c.cfg, c.issue) or return
+      deadline = seen + UNPUBLISHED_GRACE
+      return if Time.now >= deadline
+      raise Abort, "upstream distfile for #{c.newver} is not uploaded yet (404, version seen " \
+                   "#{((Time.now - seen) / 60).round} min ago); escalates if still missing on a run " \
+                   "after #{deadline.utc.strftime('%Y-%m-%d %H:%M UTC')}"
     end
 
     # Fetch and apply the optional opaque token only after copying the selected ebuild.
