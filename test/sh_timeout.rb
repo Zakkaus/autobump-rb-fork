@@ -72,6 +72,26 @@ Dir.mktmpdir('autobump-sh-') do |dir|
   check 'which is gone too', gone.call, true
 end
 
+# A container's PID 1 (`sleep infinity`) never reaps, so a finished launch leaves zombies in its
+# process group. kill(0) still finds them, and every probe launch waited out KILL_GRACE twice.
+zombie = Process.spawn('true', pgroup: true)
+sleep 0.05 until (File.read("/proc/#{zombie}/stat")[/\) (\S)/, 1] rescue nil) == 'Z'
+check 'a group of only zombies is not alive', ctx.group_alive?(zombie), false
+t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+ctx.end_leftovers(zombie, File.join(Dir.tmpdir, 'autobump-held-by-nobody'))
+check 'and its leftovers end without waiting', Process.clock_gettime(Process::CLOCK_MONOTONIC) - t < 2, true
+Process.wait(zombie)
+
+Dir.mktmpdir('autobump-sh-') do |dir|
+  odd = File.join(dir, 'a) b (c')
+  File.symlink(File.realpath('/bin/sleep'), odd)
+  live = Process.spawn([odd, 'sleep'], '30', pgroup: true)
+  sleep 0.05 until File.exist?("/proc/#{live}/stat") && File.read("/proc/#{live}/stat").include?('a) b (c')
+  check 'a live member keeps its group alive, whatever its name', ctx.group_alive?(live), true
+  Process.kill('KILL', live)
+  Process.wait(live)
+end
+
 puts '----'
 puts $fail.zero? ? 'sh_timeout: all passed' : "sh_timeout: #{$fail} failed"
 exit($fail.zero? ? 0 : 1)

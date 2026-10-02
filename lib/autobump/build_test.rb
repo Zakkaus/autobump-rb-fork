@@ -149,8 +149,8 @@ module Autobump
       words.first
     end
 
-    # Pure classification of one GUI launch. The probe itself remains advisory; callers use
-    # the boolean only to choose a truthful summary, never to stop the bump.
+    # Pure classification of one GUI launch. The probe itself remains advisory: the boolean
+    # chooses a truthful summary and opens the PR as a draft, never stops the bump.
     def self.gui_launch_outcome(bin, status, stderr, fallback_ran)
       name = File.basename(bin)
       fallback = fallback_ran ? ' (after --no-sandbox fallback)' : ''
@@ -260,7 +260,9 @@ module Autobump
     def smoke_version
       c = @c
       c.smoke = 'installed; no version output matched NEWVER (verify manually)'
-      bins(c.pkg).each do |bin|
+      # launchers first: a payload's node_modules/.bin scripts each take the full timeout per
+      # flag before the real binary is reached
+      (self.class.launchers(owned_files(c.pkg)) + bins(c.pkg)).uniq.each do |bin|
         %w[--version version -V].each do |vf|
           out = c.sh(bin, vf, timeout: 20).first.lines.first(3).join
           next unless out.include?(c.newver)
@@ -304,6 +306,7 @@ module Autobump
           stderr tail:
           #{perr.lines.last(20).join}
         OUT
+        (c.gui_failures ||= []) << [bin, outcome] if launch_failed
         res = outcome if launch_failed || !failed
         failed ||= launch_failed
         break if perr =~ GUI_MISSING_LIBRARY || GUI_STOP_STATUSES.include?(prc)

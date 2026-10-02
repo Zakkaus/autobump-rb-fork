@@ -26,7 +26,7 @@ module Autobump
     :check, :install, :pr, :diff_only, :accept_surface, :accept_payload,
     :old_ebuild, :old_pvr, :old_pv, :old_pvr_presync, :new_ebuild, :branch, :evidence,
     :multiarch, :gui, :payload, :smoke, :armed, :old_distfile_missing, :keep_old,
-    :rewrite_var, :rewrite_url, :rewrite_regex, :copied_ebuild, :bundles,
+    :rewrite_var, :rewrite_url, :rewrite_regex, :copied_ebuild, :bundles, :gui_failures,
     keyword_init: true
   ) do
     # run a command; return [combined stdout+stderr, ok?, exit_code]. Array form (never a
@@ -130,7 +130,25 @@ module Autobump
       end.uniq - [Process.pid]
     end
 
+    # A zombie still counts for kill(0), and a container whose PID 1 never reaps keeps the
+    # group's zombies forever, so every launch waited out KILL_GRACE twice. Only a member that
+    # is not a zombie keeps the group alive. comm may hold spaces and parens; the fields after
+    # the last ')' are state, ppid, pgrp.
     def group_alive?(pgid)
+      states = Dir.glob('/proc/[0-9]*/stat').filter_map do |f|
+        s = File.read(f)
+        state, _ppid, pgrp = s[(s.rindex(')') + 2)..].split(' ', 4)
+        state if pgrp.to_i == pgid
+      rescue SystemCallError
+        nil
+      end
+      # no visible member: /proc is missing, or hidepid hides a root member from us
+      return signal_alive?(pgid) if states.empty?
+
+      states.any? { |state| state != 'Z' }
+    end
+
+    def signal_alive?(pgid)
       Process.kill(0, -pgid)
       true
     rescue Errno::EPERM

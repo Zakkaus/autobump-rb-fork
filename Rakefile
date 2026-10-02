@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-task default: %i[syntax sweep decisions pr_body heavy_dep cli_flags payload_diff rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
+task default: %i[syntax sweep decisions pr_body pr_push heavy_dep cli_flags payload_diff rewrite gui_probe probe_hang gui_launchers build_dispatch fetch_failure sh_timeout distfiles_outcome bundle_status bundle_controller deps_artifact_url dynamic_source_pin preflight_guards version_compare url_recheck remote_pick gates]
 
 desc 'ruby -c on all sources'
 task :syntax do
@@ -14,6 +14,11 @@ end
 desc 'golden test for the PR body (hermetic)'
 task :pr_body do
   sh 'ruby test/pr_body.rb'
+end
+
+desc 'what the PR stage sends to git and gh (hermetic)'
+task :pr_push do
+  sh 'ruby test/pr_push.rb'
 end
 
 desc 'heavy-dependency pre-check parser (hermetic)'
