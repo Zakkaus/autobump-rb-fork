@@ -61,7 +61,8 @@ module Autobump
     end
 
     def major_jump
-      date = /\A20[0-9]{6}([._-][0-9]+)*\z/
+      # YYYYMMDD, optionally followed by HHMM or HHMMSS (v2fly geoip, domain-list-community)
+      date = /\A20[0-9]{6}([0-9]{4}|[0-9]{6})?([._-][0-9]+)*\z/
       if @old_pv =~ date && @newver =~ date
         if @newver.split(/[._-]/, 2).first.to_i < @old_pv.split(/[._-]/, 2).first.to_i
           "date version went backwards: #{@old_pv} -> #{@newver}"
