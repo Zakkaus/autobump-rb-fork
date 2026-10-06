@@ -172,7 +172,17 @@ module Autobump
 
     def dead_url_recheck
       c = @c; repo = c.cfg.repo
-      net = Dir.chdir(repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
+      # --commits stashes local files; keep its index changes out of the next bump.
+      net = Dir.mktmpdir('autobump-pkgcheck-') do |dir|
+        scan_repo = File.join(dir, 'repo')
+        raise Abort, 'cannot create pkgcheck worktree' unless
+          system('git', '-C', repo, 'worktree', 'add', '--quiet', '--detach', scan_repo, 'HEAD')
+        begin
+          Dir.chdir(scan_repo) { `pkgcheck scan --commits --net 2>&1`.scrub }
+        ensure
+          system('git', '-C', repo, 'worktree', 'remove', '--force', scan_repo)
+        end
+      end
       c.evidence.write('pkgcheck-net.txt', net)
       records = Finalize.flagged_url_records(net, c.pkg)
       old_path = "#{c.pkg}/#{File.basename(c.old_ebuild)}"

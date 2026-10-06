@@ -3,6 +3,7 @@
 # Test which URLs a pkgcheck --net scan hands to the recheck: only the URL findings under this
 # package's header, and only the URL itself. Hermetic. Run: ruby test/url_recheck.rb
 require_relative '../lib/autobump'
+require 'fileutils'
 
 $fail = 0
 def check(name, got, want)
@@ -116,6 +117,51 @@ unparsed = Autobump::Finalize.flagged_url_records(
 check 'a finding whose field cannot be read has none', unparsed, [['https://x.example/gone', nil]]
 check 'a finding whose field cannot be read counts as touched',
       Autobump::Finalize.records_this_bump_touched(unparsed, []), unparsed
+
+Dir.mktmpdir('autobump-scan-') do |dir|
+  repo = File.join(dir, 'repo')
+  bin = File.join(dir, 'bin')
+  pkg = 'app-misc/fixture'
+  FileUtils.mkdir_p([File.join(repo, pkg), bin])
+  File.write(File.join(repo, pkg, 'fixture-1.ebuild'), "EAPI=8\n")
+  git = lambda do |*args|
+    raise "git #{args.inspect} failed" unless system('git', '-C', repo, *args,
+                                                     out: File::NULL, err: File::NULL)
+  end
+  git.call('init', '-q', '-b', 'master')
+  git.call('config', 'user.name', 'test')
+  git.call('config', 'user.email', 'test@example.invalid')
+  git.call('add', '.')
+  git.call('commit', '-qm', 'initial')
+  git.call('mv', "#{pkg}/fixture-1.ebuild", "#{pkg}/fixture-2.ebuild")
+  git.call('commit', '-qm', 'bump')
+  head = `git -C #{repo} rev-parse HEAD`.strip
+  File.write(File.join(bin, 'pkgcheck'), <<~SH)
+    #!/bin/sh
+    printf '%s\n' "$*" > #{dir}/args
+    git rev-parse HEAD > #{dir}/head
+    echo 'DESCRIPTION="scan residue"' >> #{pkg}/fixture-2.ebuild
+    git add #{pkg}/fixture-2.ebuild
+  SH
+  File.chmod(0o755, File.join(bin, 'pkgcheck'))
+  evidence = Autobump::Evidence.new('scan')
+  cfg = Struct.new(:repo).new(repo)
+  ctx = Autobump::Context.new(cfg: cfg, pkg: pkg, old_ebuild: "#{pkg}/fixture-1.ebuild",
+                              new_ebuild: File.join(repo, pkg, 'fixture-2.ebuild'),
+                              old_pv: '1', newver: '2', evidence: evidence)
+  path = ENV.fetch('PATH')
+  begin
+    ENV['PATH'] = "#{bin}:#{path}"
+    Autobump::Finalize.new(ctx).send(:dead_url_recheck)
+    check 'commit scan checks the bumped commit', File.read("#{dir}/head").strip, head
+    check 'commit and network checks stay enabled', File.read("#{dir}/args").strip, 'scan --commits --net'
+    check 'scan residue cannot block the next bump', `git -C #{repo} status --porcelain`, ''
+    check 'the scan worktree is removed', `git -C #{repo} worktree list --porcelain`.scan(/^worktree /).size, 1
+  ensure
+    ENV['PATH'] = path
+    FileUtils.remove_entry(evidence.dir)
+  end
+end
 
 puts '----'
 puts $fail.zero? ? 'url_recheck: all passed' : "url_recheck: #{$fail} failed"
