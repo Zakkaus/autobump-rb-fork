@@ -33,6 +33,9 @@ module Autobump
     GUI_MISSING_LIBRARY_NAME = /error while loading shared libraries: ([^:\s]+):/
     GUI_CRASH_STATUSES = [132, 134, 135, 136, 139].freeze
     GUI_STOP_STATUSES = (GUI_CRASH_STATUSES + [124]).freeze
+    # Chromium refuses root with a hint at --no-sandbox; without user namespaces it aborts on
+    # a chrome-sandbox that is not setuid root and names neither the flag nor the cause.
+    GUI_SANDBOX_REFUSAL = /no-sandbox|SUID sandbox helper binary/
     ON_PATH = %r{\A/(?:usr/|opt/)?s?bin/[^/]+\z}
     DESKTOP_ENTRY = %r{/share/applications/[^/]+\.desktop\z}
 
@@ -386,7 +389,7 @@ module Autobump
       self.class.gui_targets(owned_files(c.pkg)).each do |bin|
         fallback_ran = false
         perr, prc = gui_launch(bin)
-        if perr.include?('no-sandbox')
+        if perr =~ GUI_SANDBOX_REFUSAL
           fallback_ran = true
           perr, prc = gui_launch(bin, '--no-sandbox', '--disable-gpu')
         end

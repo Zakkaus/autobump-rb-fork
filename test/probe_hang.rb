@@ -66,10 +66,21 @@ Dir.mktmpdir('autobump-probe-') do |dir|
     version) echo "fast version 1.2.3"; echo "built 1.2.3" ;;
     esac
   SH
-  File.chmod(0o755, launcher, fast)
+  suid = File.join(dir, 'suid')
+  File.write(suid, <<~SH)
+    #!/bin/sh
+    case "$*" in
+    *--no-sandbox*) exit 0 ;;
+    esac
+    echo 'The SUID sandbox helper binary was found, but is not configured correctly.' >&2
+    exit 133
+  SH
+  File.chmod(0o755, launcher, fast, suid)
   desktop = File.join(dir, 'share/applications/launcher.desktop')
   FileUtils.mkdir_p(File.dirname(desktop))
   File.write(desktop, "[Desktop Entry]\nType=Application\nExec=#{launcher} %U\n")
+  suid_desktop = File.join(dir, 'share/applications/suid.desktop')
+  File.write(suid_desktop, "[Desktop Entry]\nType=Application\nExec=#{suid} %U\n")
 
   ctx = lambda do
     Autobump::Context.new(cfg: Struct.new(:sudo).new(''), pkg: 'app-misc/fixture', newver: '1.2.3',
@@ -96,6 +107,13 @@ Dir.mktmpdir('autobump-probe-') do |dir|
         c.smoke, ' | GUI launch probe: launcher exited immediately (status 0) before the 15s timeout ' \
                  '(after --no-sandbox fallback)'
   check 'the escaped app is gone after the GUI probe', gone?(pidfile), true
+
+  c = ctx.call
+  Probe.new(c, [suid, suid_desktop]).send(:gui_probe)
+  check 'a chrome-sandbox abort without user namespaces retries with --no-sandbox',
+        c.smoke, ' | GUI launch probe: suid exited immediately (status 0) before the 15s timeout ' \
+                 '(after --no-sandbox fallback)'
+  check 'and is not recorded as a failure', c.gui_failures, nil
 end
 
 puts '----'
